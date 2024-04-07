@@ -1,0 +1,337 @@
+%% 
+[filenames_fluor,path_fluorescence] = uigetfile ('.tif','Pick MCM Fluorescent Files','Multiselect','on');
+[filenames_Prot2_fluor,path_Prot2_fluor] = uigetfile ('.tif','Pick PLo1 Fluorescent Files','Multiselect','on');
+%[filenames_bin,path_binary] =  uigetfile ('*tif','Pick Binary Files','Multiselect','on');
+filenames_fluor = filenames_fluor';
+filenames_Prot2_fluor = filenames_Prot2_fluor';
+%filenames_bin = filenames_bin';
+num_images = length(filenames_fluor);
+ 
+BD_file = importdata('trk-birth-death.csv');
+Div_file = importdata('trk-division.csv');
+trk_image_files = uigetfile('trk-Labelled*.tif','Select tracked images', 'Multiselect','on');
+trk_image_files = trk_image_files';
+%% 
+
+max_num_frames = 90;%120 usually
+time_int = 5; %minutes
+pixel_size = 0.130;
+div_time_cut = 1;%usually 1 if you only want cells born in the video
+length_ext_cut = 3;
+per_pixels = 0.15;
+per_pixels_Plo1 = 0.08;
+pixels_Plo1 = 9;
+time_pts_cut = 12;
+time_pts_cut_length = 10;
+time_pts_length = 5;
+
+BD_data = BD_file.data;
+elem_born = find(BD_data(:,2)>div_time_cut);
+BD_data_revised = BD_data(elem_born,:);
+elem_death = find(BD_data_revised(:,3)<max_num_frames);
+BD_data_revised_2 = BD_data_revised(elem_death,:);
+non_art = find((BD_data_revised_2(:,3)-BD_data_revised_2(:,2)) >0);
+BD_data_revised_2 = BD_data_revised_2(non_art,:);
+num_cells = size(BD_data_revised_2,1);
+div_time = zeros(num_cells,2);
+div_length = zeros(num_cells,3);
+for i = 1:num_cells
+    div_time(i,2) = time_int*(BD_data_revised_2(i,3) - BD_data_revised_2(i,2));
+    frame_grab = BD_data_revised_2(i,3);
+    img_select = imread(trk_image_files{frame_grab});
+    cell_select = BD_data_revised_2(i,1);
+    img_select_rev = img_select;
+    img_select_rev(img_select_rev~=cell_select) = 0;
+    img_select_rev(img_select_rev == cell_select) = 1;
+    %stats = regionprops(img_select_rev, 'MajorAxisLength');
+    %div_length(i,3) = stats.MajorAxisLength*pixel_size;
+    ferprop_div = bwferet(img_select_rev,'MaxFeretProperties');
+    div_length(i,3) = ferprop_div.MaxDiameter*pixel_size;
+    
+    frame_grab_born = BD_data_revised_2(i,2);
+    img_select_born = imread(trk_image_files{frame_grab_born});
+    img_select_born_rev = img_select_born;
+    img_select_born_rev(img_select_born_rev~=cell_select) = 0;
+    img_select_born_rev(img_select_born_rev == cell_select) =1;
+%     stats_born = regionprops(img_select_born_rev, 'MajorAxisLength');
+%     div_length(i,2) = stats_born.MajorAxisLength*pixel_size;%length at born
+    ferprop_born = bwferet(img_select_born_rev,'MaxFeretProperties');
+    div_length(i,2) = ferprop_born.MaxDiameter*pixel_size;%length at born
+    
+    div_length(i,1) = cell_select;
+    div_time(i,1) = cell_select;
+end
+
+find_nonerrors = find(div_time(:,2) ~=0);
+div_time = div_time(find_nonerrors,:);
+div_length = div_length(find_nonerrors,:);
+%div_length = div_length(find_nonerrors,:);
+div_time(:,2) = div_time(:,2)/60;%hours
+% find_div_errs = find(div_time(:,2)>1);
+% div_time = div_time(find_div_errs,:);
+% div_length = div_length(find_div_errs,:);
+length_extension = div_length(:,3)-div_length(:,2);
+ length_err = find(length_extension > length_ext_cut);
+div_time = div_time(length_err,:);
+div_length = div_length(length_err,:);
+ length_extension = length_extension(length_err,:);
+
+figure (4),
+
+histogram(div_time(:,2));
+mean(div_time(:,2));
+figure(6)
+histogram(div_length(:,3));
+mean_div = mean(div_length(:,3));
+std_div = std(div_length(:,3));
+cov_value = std_div/mean_div;
+disp(mean_div);
+disp(mean(div_time(:,2)));
+
+
+[b1,Sfit] = polyfit(div_length(:,2), length_extension,1);
+[Yfit, delta_fit] = polyconf(b1, div_length(:,2), Sfit);
+yCalc1 = polyval(b1, div_length(:,2));
+figure(5), 
+scatter(div_length(:,2), length_extension)
+hold on 
+plot(div_length(:,2), yCalc1);
+hold off
+
+%% 
+num_cells = length(div_length(:,1));
+Fluor_cell = cell(num_cells, 7); %cell_ID, cell_length, cell intensity, nuclear intensity
+for i = 1:num_cells
+    cell_ID = div_length(i,1);
+    cell_find = find(BD_data(:,1) == cell_ID);
+    cell_born_frame = BD_data(cell_find,2);
+    cell_death_frame = BD_data(cell_find,3);
+    cell_track = cell_death_frame - cell_born_frame + 1;
+    cell_length = [];%zeros(cell_track,1);
+    cell_fluor = [];%zeros(cell_track,1);
+    nuc_fluor_values = [];%zeros(cell_track,1);
+    cell_fluor_2 = [];
+    nuc_fluor_values_2 = [];
+    cell_fluor_2_total = [];
+    for j = cell_born_frame:cell_death_frame
+      frame_grab_Prot2 = imread(strcat(path_Prot2_fluor,filenames_Prot2_fluor{j}));
+      frame_grab_fluor = imread(strcat(path_fluorescence,filenames_fluor{j}));
+      %frame_grab_bin = imread(strcat(path_bin,filenames_bin{j}));
+      frame_grab_trk_bin = imread(trk_image_files{j});
+%       nuc_stats = regionprops(logical(frame_grab_nuc),'Centroid');
+%       nuc_centroids = cell2mat({nuc_stats.Centroid}');
+      cell_stats = regionprops(logical(frame_grab_trk_bin),frame_grab_trk_bin, 'PixelList','MeanIntensity','MaxFeretPropertie');
+      cell_stats_fluor = regionprops(logical(frame_grab_trk_bin),frame_grab_fluor, 'PixelValues','PixelList','MeanIntensity','MaxFeretProperties','SubarrayIdx');
+      cell_stats_fluor_2 = regionprops(logical(frame_grab_trk_bin),frame_grab_Prot2, 'PixelValues','PixelList','MeanIntensity','MaxFeretProperties');
+      
+      cell_isolate = find(cell2mat({cell_stats.MeanIntensity}')==cell_ID);
+      if isempty(cell_isolate)==1
+         Fluor_cell{i,1} = [];
+          break
+      end
+      cell_pixels = cell2mat({cell_stats.PixelList}');
+      %nuc_find = find((nuc_centroids(:,1) == cell_pixels(cell_isolate,1)) & (nuc_centroids(:,2) == cell_pixels(cell_isolate,2)));
+      
+      length_vals = cell2mat({cell_stats.MaxFeretDiameter}');%cell length at time 
+      %cell_intensity_vals = cell2mat({cell_stats_fluor.MeanIntensity}');%mean intensity of cell at time
+  %Colour 1    
+      pix_intensities = {cell_stats_fluor.PixelValues}';
+      pix_intensities_cell = pix_intensities{cell_isolate};
+     % pix_intensities_iso = cell2mat(pix_intensities_cell);
+      pix_sort = sort(pix_intensities_cell(:),'descend');     
+      nuc_inten = pix_sort(1:ceil(length(pix_sort )*per_pixels));
+      pix_sort_cell = sort(pix_intensities_cell(:),'ascend');     
+      cell_inten = pix_sort_cell(1:ceil(length(pix_sort_cell )*(1-per_pixels)));
+  %Colour 2
+      pix_intensities_2 = {cell_stats_fluor_2.PixelValues}';
+      pix_intensities_cell_2 = pix_intensities_2{cell_isolate};
+     % pix_intensities_iso = cell2mat(pix_intensities_cell);
+      pix_sort_2 = sort(pix_intensities_cell_2(:),'descend');
+      nuc_inten_2 = pix_sort_2(1:pixels_Plo1);  
+%       nuc_inten_2 = pix_sort_2(1:ceil(length(pix_sort_2)*per_pixels_Plo1));
+      pix_sort_cell_2 = sort(pix_intensities_cell_2(:),'ascend');     
+%       cell_inten_2 = pix_sort_cell_2(1:ceil(length(pix_sort_cell_2 )*(1-per_pixels_Plo1)));
+      cell_inten_2 = pix_sort_2(pixels_Plo1+1:end);
+      
+      cell_length = [cell_length;length_vals(cell_isolate)];
+      %cell_fluor = [cell_fluor;cell_intensity_vals(cell_isolate)];
+      cell_fluor = [cell_fluor;mean(cell_inten)];
+      nuc_fluor_values = [nuc_fluor_values;mean(nuc_inten)];
+       cell_fluor_2 = [cell_fluor_2;mean(cell_inten_2)];
+      nuc_fluor_values_2 = [nuc_fluor_values_2;mean(nuc_inten_2)];
+      cell_fluor_2_total = [cell_fluor_2_total;mean(pix_intensities_cell_2)];
+    end
+    if length(cell_length) < (cell_death_frame - cell_born_frame)+1
+        continue
+    end
+    Fluor_cell{i,1} = cell_ID;
+    Fluor_cell{i,2} = cell_length;
+    Fluor_cell{i,3} = cell_fluor;
+    Fluor_cell{i,4} =  nuc_fluor_values;
+    Fluor_cell{i,5} = cell_fluor_2;
+    Fluor_cell{i,6} = nuc_fluor_values_2;
+    Fluor_cell{i,7} = cell_fluor_2_total;
+    
+end
+%% Protein 1(MCM)
+
+
+MCM_SYN = zeros(num_cells,18);
+for i=1:num_cells
+    
+     cell_length_time = (cell2mat(Fluor_cell(i ,2)))*pixel_size;
+    
+    cell_fluor_time = cell2mat(Fluor_cell(i ,3));
+    nuc_fluor_time = cell2mat(Fluor_cell(i,4));
+    cell_fluor_time_2 = cell2mat(Fluor_cell(i ,5));
+    nuc_fluor_time_2 = cell2mat(Fluor_cell(i,6));
+    %nuc_fluor_smooth = smoothdata(nuc_fluor_time,'movmedian',3);
+    %time_vals = ((1:length(  cell_length_time))-1)*time_int;
+    CDK_activity = cell_fluor_time./nuc_fluor_time;
+    %CDK_activity_syn = nuc_fluor_time./cell_fluor_time;
+    %CDK_activity_mcm = cell_fluor_time_2./nuc_fluor_time_2;
+    Plo1_smooth = smoothdata(nuc_fluor_time_2, 'sgolay',3);
+    CDK_activity_mcm_smooth = smoothdata(CDK_activity ,'sgolay',4);
+    Length_smooth = smoothdata(cell_length_time,'sgolay',4);
+    [max_MCM, id_MCM]= max(CDK_activity_mcm_smooth);
+    [max_Plo1, id_Plo1] = max(Plo1_smooth);
+    if id_Plo1 < time_pts_cut
+        continue
+    end
+    if id_MCM + time_pts_length > length(cell_length_time)
+        continue
+    end
+    CDK_MCM_Smooth_select = CDK_activity_mcm_smooth(id_MCM - time_pts_cut:id_MCM);
+    Plo1_Smooth_select = Plo1_smooth(id_Plo1 - time_pts_cut:id_Plo1); 
+%     cell_length_select = cell_length_time(id_MCM + time_pts_length- time_pts_cut:id_MCM + time_pts_length);
+    length_smooth_select = Length_smooth(id_MCM + time_pts_length- time_pts_cut_length:id_MCM + time_pts_length);
+    ipt_MCM = findchangepts(CDK_MCM_Smooth_select , 'Statistic', 'linear','MaxNumChanges',2,'MinDistance',5);% %default 2, 5
+    ipt_Plo1 = findchangepts(Plo1_Smooth_select, 'Statistic', 'linear','MaxNumChanges',1,'MinDistance',3);%default 1, 3
+    ipt_length = findchangepts(length_smooth_select , 'Statistic', 'linear','MaxNumChanges',2,'MinDistance',5);% default is 2, 5
+    loc_MCM = id_MCM - (time_pts_cut - ipt_MCM(1) + 1);
+    loc_Plo1 = id_Plo1 - (time_pts_cut - ipt_Plo1(1) + 1);
+    loc_length = id_MCM+time_pts_length - (time_pts_cut_length - ipt_length(1) + 1);
+    time_diff = (loc_Plo1 - loc_MCM)*time_int;
+    time_scale = (length(Length_smooth)-1)*time_int;
+    time_diff_growth = (loc_length - loc_MCM)*time_int;
+    MCM_SYN(i,1) = time_diff;
+    MCM_SYN (i,2) = ((loc_MCM-1)*time_int)/time_scale;% scale so that time zero is beginning of trace (i.e. time since birth)
+    MCM_SYN (i,3) = ((loc_Plo1-1)*time_int)/time_scale;
+    MCM_SYN (i,4) = Length_smooth(loc_MCM);
+    MCM_SYN (i,5) = Length_smooth(loc_Plo1);
+    MCM_SYN (i,6) = div_length(i,3) - Length_smooth(loc_MCM);
+    MCM_SYN (i,7) = div_length(i,3) - Length_smooth(loc_Plo1);
+    MCM_SYN (i,8) = div_length(i,3);
+    MCM_SYN (i,9) = div_length(i,2);
+    MCM_SYN (i,10) = MCM_SYN(i,2)* time_scale;
+    MCM_SYN (i,11) = MCM_SYN(i,3)*time_scale;
+    MCM_SYN (i,12) = time_scale ;
+    MCM_SYN (i,13) = CDK_activity_mcm_smooth(loc_MCM);
+    MCM_SYN (i,14) = time_diff_growth;
+    MCM_SYN (i,15) = max_MCM;
+    MCM_SYN (i,16) = max_Plo1;
+
+
+end
+elem_nonzeros = find(MCM_SYN(:,2));
+ MCM_SYN = MCM_SYN(elem_nonzeros,:);
+ Fluor_cell = Fluor_cell(elem_nonzeros,:);
+ div_length = div_length(elem_nonzeros,:);
+ BD_data_revised_2 = BD_data_revised_2(elem_nonzeros,:);
+cov_MCM = std(MCM_SYN(:,4))/mean(MCM_SYN(:,4));
+cov_SYN = std(MCM_SYN(:,5))/mean(MCM_SYN(:,5));
+%%
+MCM_SYN(1,17) = cov_MCM;
+MCM_SYN(1,18) = cov_SYN;
+elem_nonzeros = find(MCM_SYN(:,2));
+MCM_SYN = MCM_SYN(elem_nonzeros,:);
+MCM_change = mean(MCM_SYN(:,2));
+SYN_change = mean(MCM_SYN(:,3));
+[b2,Sfit_MCM] = polyfit(MCM_SYN(:,10), MCM_SYN(:,12),1);
+[Yfit_MCM, delta_fit_MCM] = polyconf(b2, MCM_SYN(:,10), Sfit_MCM);
+mdl_MCM =  fitlm(MCM_SYN(:,10),MCM_SYN(:,12));
+yCalc1_MCM = polyval(b2, MCM_SYN(:,10));
+figure(5), 
+scatter(MCM_SYN(:,10), MCM_SYN(:,12))
+hold on 
+plot(MCM_SYN(:,10), yCalc1_MCM );
+hold off
+
+%% 
+
+
+cell_num =7;
+
+time_pts_cut = 12;%default 12
+time_pts_cut_length = 10;%default 10
+ time_pts_length = 5;%default 5
+
+
+    cell_length_time = (cell2mat(Fluor_cell(cell_num ,2)))*pixel_size;
+    fluor_time_1 = cell2mat(Fluor_cell(cell_num ,3));
+    fluor_time_2 = cell2mat(Fluor_cell(cell_num ,4));
+    CDK_activity_time = fluor_time_1./fluor_time_2;
+    fluor_time_3 = cell2mat(Fluor_cell(cell_num ,6));
+    fluor_time_4 = cell2mat(Fluor_cell(cell_num ,5));
+    fluor_time_5 = cell2mat(Fluor_cell(cell_num,7));
+    Plo1_smooth = smoothdata(fluor_time_3, 'sgolay',3);%default 3
+    CDK_activity_mcm_smooth = smoothdata(CDK_activity_time , 'sgolay',4);%default 4
+   Length_smooth = smoothdata(cell_length_time, 'sgolay',4);%defualt 4
+    [max_MCM, id_MCM]= max(CDK_activity_mcm_smooth);
+    [max_Plo1, id_Plo1] = max(Plo1_smooth);
+    CDK_MCM_Smooth_select = CDK_activity_mcm_smooth(id_MCM - time_pts_cut:id_MCM);
+    Plo1_Smooth_select = Plo1_smooth(id_Plo1 - time_pts_cut:id_Plo1);
+ %cell_length_select = cell_length_time(id_MCM+time_pts_length - time_pts_cut:id_MCM+time_pts_length);
+    length_smooth_select = Length_smooth(id_MCM+time_pts_length - time_pts_cut_length:id_MCM+time_pts_length);
+    ipt_MCM = findchangepts(CDK_MCM_Smooth_select , 'Statistic', 'linear','MaxNumChanges',2,'MinDistance',5); %default 2, 5
+    ipt_Plo1 = findchangepts(Plo1_Smooth_select, 'Statistic', 'linear','MaxNumChanges',1,'MinDistance',3); %def6ault 1, 3
+    ipt_length = findchangepts(length_smooth_select  , 'Statistic', 'linear','MaxNumChanges',2,'MinDistance',5);%default 2, 5
+    loc_MCM = id_MCM - (time_pts_cut - ipt_MCM(1) + 1);
+    loc_Plo1 = id_Plo1 - (time_pts_cut - ipt_Plo1(1) + 1);
+    loc_length = id_MCM+time_pts_length - (time_pts_cut_length - ipt_length(1) + 1);
+%     CDK_smooth = smoothdata(CDK_activity_time,'movmedian',3);
+%     fluor_smooth_3 = smoothdata(fluor_time_3,'movmedian',3);
+%     fluor_smooth_4 = smoothdata(fluor_time_4,'movmedian',3);
+    time_vals = ((1:length(fluor_time_3))-1)*time_int;
+  figure,
+    hold on
+    yyaxis right
+    plot(time_vals/max(time_vals),CDK_activity_mcm_smooth,'Color',[0.6350 0.0780 0.1840],'LineStyle','--','LineWidth',1.0);
+     plot(time_vals/max(time_vals),CDK_activity_time,'Color',[0.6350 0.0780 0.1840],'LineStyle','-','LineWidth',1.0);
+    text(time_vals(loc_MCM)/max(time_vals), CDK_activity_mcm_smooth (loc_MCM),'Nuclear Entry')
+     ylabel('Sensor Activity')
+   
+%     plot(time_vals/max(time_vals),cell_length_time,'Color',[0.4940 0.1840 0.5560],'LineStyle','-','LineWidth',1.0);
+%     ylabel('Cell Length')
+    yyaxis left
+    plot(time_vals/max(time_vals), fluor_time_3,'Color',[0 0.4470 0.7410],'LineStyle','-','LineWidth',1.0)%
+      plot(time_vals/max(time_vals), Plo1_smooth,'Color',[0 0.4470 0.7410],'LineStyle','--','LineWidth',1.0)
+    text(time_vals(loc_Plo1)/max(time_vals), Plo1_smooth(loc_Plo1),'Rate Change Plo1')
+% plot(time_vals/max(time_vals), fluor_time_4,'Color',[0.4660 0.6740 0.1880],'LineStyle','-','LineWidth',1.0)%
+%     plot(time_vals/max(time_vals), fluor_time_5,'Color',[0.4940 0.1840 0.5560],'LineStyle','-','LineWidth',1.0)%
+    ylabel('Mean Intensity')
+    xlabel('Time (normalized)')
+    hold off
+time_vals_mcm = time_vals(id_MCM - time_pts_cut:id_MCM);
+    time_vals_Plo1 = time_vals(id_Plo1 - time_pts_cut:id_Plo1);
+    time_vals_length = time_vals(id_MCM+time_pts_length - time_pts_cut_length:id_MCM+time_pts_length);
+    figure, 
+    plot (time_vals_Plo1,Plo1_Smooth_select);%,'b-', time_vals, CDK_activity_mcm_smooth,'g-')
+    text(time_vals_Plo1(ipt_Plo1), Plo1_Smooth_select(ipt_Plo1),'Max Rate Change SYN')
+    figure
+    plot (time_vals_mcm,CDK_MCM_Smooth_select);
+    text(time_vals_mcm(ipt_MCM),CDK_MCM_Smooth_select(ipt_MCM),'Max Rate Change MCM')
+    figure, 
+    plot (time_vals_length,length_smooth_select);
+    text(time_vals_length(ipt_length),length_smooth_select (ipt_length),'Max Rate Change Cell Length')
+figure, plot(Length_smooth)
+    %% 
+%      save('Fluorescent_data.mat', 'Fluor_cell')
+%  save('Cell_size.mat', 'div_length');
+%  save('div_time.mat','div_time');
+
+MCM_Compare = [MCM_AMP_WT;MCM_AMP_cut12];
+g1 = repmat({'WT'},96,1);
+g2 = repmat({'cut12.s11'},195,1);
+g = [g1;g2];
+boxplot(MCM_Compare,g)
